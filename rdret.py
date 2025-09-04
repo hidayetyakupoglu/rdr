@@ -229,16 +229,19 @@ elif page == "Simulation":
         st.success(f"En Başarılı Jammer: {best_jammer} (yüksek Jamming Impact)")
 
         # Dashboard grafikleri
-        fig, axes = plt.subplots(2,2, figsize=(14,10))
+
+
+        fig, axes = plt.subplots(3,2, figsize=(16,12))  # 3 satır 2 sütun
+        
         radars = list(snr_history.keys())
         jammers = list(jammer_freq_history.keys())
         state = state_history[-1]
-
+        
         # Radar SNR
         axes[0,0].bar(radars, [state[r][2] for r in radars], color='skyblue')
         axes[0,0].set_ylim(0,5)
         axes[0,0].set_title("Radar SNR at Final Episode")
-
+        
         # Detection Score
         for r in radars:
             axes[0,1].plot(detection_scores[r], label=r)
@@ -246,20 +249,33 @@ elif page == "Simulation":
         axes[0,1].set_ylabel("Detection Score")
         axes[0,1].set_title("Radar Detection Score")
         axes[0,1].legend()
-
+        
         # Jammer Frequency Heatmap
         jammer_matrix = np.array([jammer_freq_history[j] for j in jammers])
         sns.heatmap(jammer_matrix, annot=False, fmt="d", cmap="YlOrRd", cbar=True, ax=axes[1,0])
         axes[1,0].set_xlabel("Episode")
         axes[1,0].set_ylabel("Jammer Agents")
         axes[1,0].set_title("Jammer Frequency Choices")
-
+        
         # Radar Frequency Heatmap
         radar_matrix = np.array([radar_freq_history[r] for r in radars])
         sns.heatmap(radar_matrix, annot=False, fmt="d", cmap="Blues", cbar=True, ax=axes[1,1])
         axes[1,1].set_xlabel("Episode")
         axes[1,1].set_ylabel("Radar Agents")
         axes[1,1].set_title("Radar Frequency Choices")
-
+        
+        # -------------------------------
+        # Avg Jamming Impact Grafiği
+        # -------------------------------
+        axes[2,0].plot(jamming_impact_scores, color='red', label='Avg Jamming Impact')
+        axes[2,0].set_xlabel("Episode")
+        axes[2,0].set_ylabel("Average SNR Reduction")
+        axes[2,0].set_title("Avg Jamming Impact Over Episodes")
+        axes[2,0].legend()
+        
+        # Boş bırakılacak yer (opsiyonel)
+        axes[2,1].axis('off')
+        
         plt.tight_layout()
         st.pyplot(fig)
+
