@@ -76,6 +76,58 @@ class RealisticJammingEnv(AECEnv):
             self._cumulative_rewards[agent] += reward
             rewards[agent] = reward
         return self.state, rewards
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
+from collections import deque
+
+class DQNAgent:
+    def __init__(self, obs_size, n_actions, lr=1e-3, gamma=0.95):
+        self.obs_size = obs_size
+        self.n_actions = n_actions
+        self.gamma = gamma
+        self.epsilon = 1.0
+        self.epsilon_min = 0.05
+        self.epsilon_decay = 0.995
+        self.memory = deque(maxlen=2000)
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = nn.Sequential(
+            nn.Linear(obs_size, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, n_actions)
+        ).to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
+        self.loss_fn = nn.MSELoss()
+
+    def act(self, state):
+        if random.random() < self.epsilon:
+            return random.randint(0, self.n_actions-1)
+        state_t = torch.FloatTensor(state).to(self.device)
+        with torch.no_grad():
+            return int(torch.argmax(self.model(state_t)).item())
+
+    def remember(self, state, action, reward, next_state):
+        self.memory.append((state, action, reward, next_state))
+
+    def replay(self, batch_size=32):
+        if len(self.memory) < batch_size:
+            return
+        batch = random.sample(self.memory, batch_size)
+        for state, action, reward, next_state in batch:
+            state_t = torch.FloatTensor(state).to(self.device)
+            next_state_t = torch.FloatTensor(next_state).to(self.device)
+            reward_t = torch.tensor(reward, dtype=torch.float32).to(self.device)
+            target = reward_t + self.gamma * torch.max(self.model(next_state_t))
+            current = self.model(state_t)[action]
+            loss = self.loss_fn(current, target)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
 # -------------------------------
 # Streamlit Başlık
