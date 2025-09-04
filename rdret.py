@@ -1,6 +1,6 @@
 # ==========================================
-# Multi-Agent DQN ET Jamming Simulation with Streamlit Dashboard
-# PW & PRI included
+# Multi-Agent DQN ET Jamming Simulation with PW and PRI
+# Streamlit Version
 # ==========================================
 
 import streamlit as st
@@ -26,6 +26,8 @@ class RealisticJammingEnv:
         self.n_jammers = n_jammers
         self.n_radars = n_radars
         self.agents = ["jammer_" + str(i) for i in range(n_jammers)] + ["radar_" + str(i) for i in range(n_radars)]
+        
+        # Radar parametreleri (örnek: APS-115 A)
         self.radar_params = {
             "freq_min": 8900,
             "freq_max": 9400,
@@ -34,7 +36,8 @@ class RealisticJammingEnv:
             "PW_min": 2.3,
             "PW_max": 2.8
         }
-        self.action_spaces = {agent: 5 for agent in self.agents if "jammer" in agent}
+        
+        self.action_spaces = {agent: 5 for agent in self.agents if "jammer" in agent}  # Örnek 5 farklı aksiyon
         self.state = {}
         self.reset()
     
@@ -45,8 +48,9 @@ class RealisticJammingEnv:
                 freq = np.random.uniform(self.radar_params["freq_min"], self.radar_params["freq_max"])
                 PRI = np.random.uniform(self.radar_params["PRI_min"], self.radar_params["PRI_max"])
                 PW = np.random.uniform(self.radar_params["PW_min"], self.radar_params["PW_max"])
-                self.state[agent] = np.array([0.0, freq, 5.0, PRI, PW])
+                self.state[agent] = np.array([0.0, freq, 5.0, PRI, PW])  # [power, freq, SNR, PRI, PW]
             else:
+                # Jammer state placeholder
                 self.state[agent] = np.zeros(5)
         return self.state
     
@@ -54,21 +58,25 @@ class RealisticJammingEnv:
         rewards = {}
         for agent, action in actions.items():
             if "jammer" in agent:
-                power = random.uniform(1,5)
+                # Jammer seçilen frekans ve güç
+                power = random.uniform(1, 5)  # örnek güç
                 freq_choice = np.random.uniform(self.radar_params["freq_min"], self.radar_params["freq_max"])
                 self.state[agent] = np.array([power, freq_choice, 0.0, 0.0, 0.0])
+                
                 reward = 0
+                # Radar SNR düşür
                 for r in [a for a in self.agents if "radar" in a]:
                     radar_freq = self.state[r][1]
                     radar_PRI = self.state[r][3]
                     radar_PW = self.state[r][4]
-                    if abs(freq_choice - radar_freq) < 50:
-                        impact = 0.1*power*(1 - abs(radar_PW-2.5)/0.5)*(1 - abs(radar_PRI-2515)/31.65)
-                        self.state[r][2] = max(0, self.state[r][2]-impact)
+                    # Basit model: frekans yakınsa SNR düşür
+                    if abs(freq_choice - radar_freq) < 50:  # ±50 MHz tolerans
+                        impact = 0.1*power*(1 - abs(radar_PW-2.5)/2)*(1 - abs(radar_PRI-2515)/31.65)
+                        self.state[r][2] = max(0, self.state[r][2] - impact)
                         reward += impact
                 rewards[agent] = reward
             else:
-                rewards[agent] = self.state[agent][2]
+                rewards[agent] = self.state[agent][2]  # radar ödülü = SNR
         return self.state, rewards
 
 # -------------------------------
@@ -86,7 +94,7 @@ class DQNAgent:
         self.epsilon_decay = 0.995
         
         self.model = nn.Sequential(
-            nn.Linear(obs_size,64),
+            nn.Linear(obs_size, 64),
             nn.ReLU(),
             nn.Linear(64,64),
             nn.ReLU(),
@@ -125,7 +133,7 @@ class DQNAgent:
 # -------------------------------
 # Streamlit App
 # -------------------------------
-st.title("Multi-Agent DQN ET Jamming Simulation with PW & PRI")
+st.title("Multi-Agent DQN ET Jamming Simulation (PW & PRI included)")
 
 n_jammers = st.sidebar.number_input("Number of Jammer Agents", 1, 5, 2)
 n_radars = st.sidebar.number_input("Number of Radar Agents", 1, 3, 1)
@@ -135,15 +143,16 @@ env = RealisticJammingEnv(n_jammers=n_jammers, n_radars=n_radars)
 jammer_agents = [a for a in env.agents if "jammer" in a]
 agents = {agent: DQNAgent(obs_size=5, n_actions=env.action_spaces[agent]) for agent in jammer_agents}
 
+# Metrikler
 snr_history = {r: [] for r in env.agents if "radar" in r}
 jamming_impact_history = []
-jammer_freq_history = {j: [] for j in jammer_agents}
 
+# Eğitim ve simülasyon
 st.write("Training and simulation in progress...")
 for ep in range(n_episodes):
     state = env.reset()
     episode_reward = 0
-    for step in range(10):
+    for step in range(10):  # Her episode 10 step
         actions = {agent: agents[agent].act(state[agent]) for agent in jammer_agents}
         next_state, rewards = env.step(actions)
         for agent in jammer_agents:
@@ -152,17 +161,16 @@ for ep in range(n_episodes):
         state = next_state
         episode_reward += sum([rewards[a] for a in jammer_agents])
     
+    # Radar SNR ve jamming impact kaydı
     for r in snr_history:
         snr_history[r].append(state[r][2])
-    for j in jammer_agents:
-        jammer_freq_history[j].append(int(state[j][1]))
     jamming_impact_history.append(episode_reward)
     
     if ep % 25 == 0:
         st.write(f"Episode {ep}: Avg Jamming Impact = {episode_reward:.2f}")
 
 # -------------------------------
-# Visualization
+# Görselleştirme
 # -------------------------------
 st.subheader("Radar SNR over Episodes")
 fig, ax = plt.subplots()
@@ -173,19 +181,11 @@ ax.set_ylabel("Radar SNR")
 ax.legend()
 st.pyplot(fig)
 
-st.subheader("Jammer Frequency Heatmap")
-jammer_matrix = np.array([jammer_freq_history[j] for j in jammer_agents])
-fig2, ax2 = plt.subplots()
-sns.heatmap(jammer_matrix, annot=False, fmt="d", cmap="YlOrRd", cbar=True, ax=ax2)
-ax2.set_xlabel("Episode")
-ax2.set_ylabel("Jammer Agents")
-st.pyplot(fig2)
-
 st.subheader("Average Jamming Impact per Episode")
-fig3, ax3 = plt.subplots()
-ax3.plot(jamming_impact_history, color='red')
-ax3.set_xlabel("Episode")
-ax3.set_ylabel("Avg Jamming Impact")
-st.pyplot(fig3)
+fig2, ax2 = plt.subplots()
+ax2.plot(jamming_impact_history, color='red')
+ax2.set_xlabel("Episode")
+ax2.set_ylabel("Avg Jamming Impact")
+st.pyplot(fig2)
 
 st.success("Simulation complete!")
