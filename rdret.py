@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-# ==========================================
-# Multi-Agent DQN ET Jamming - Multi-Page Streamlit App
-# ==========================================
-
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,12 +13,12 @@ from pettingzoo import AECEnv
 from pettingzoo.utils.agent_selector import AgentSelector
 from gymnasium import spaces
 
-# -------------------------------
+# ==========================================
 # Ortam Tanımı
-# -------------------------------
+# ==========================================
 class RealisticJammingEnv(AECEnv):
-    def __init__(self, n_jammers=2, n_radars=1, max_power=10, n_freq=5,
-                 pw_range=(2.0,3.0), pri_range=(2500.0,2532.0)):
+    def __init__(self, n_jammers=2, n_radars=1, max_power=10,
+                 n_freq=5, pw_min=1, pw_max=5, pri_min=2500, pri_max=2530):
         super().__init__()
         self.n_jammers = n_jammers
         self.n_radars = n_radars
@@ -30,24 +26,25 @@ class RealisticJammingEnv(AECEnv):
         self.possible_agents = self.agents[:]
         self.max_power = max_power
         self.n_freq = n_freq
-        self.pw_range = pw_range
-        self.pri_range = pri_range
+        self.pw_min = pw_min
+        self.pw_max = pw_max
+        self.pri_min = pri_min
+        self.pri_max = pri_max
 
+        # Action space: power * freq kombinasyonu
         self.action_spaces = {agent: spaces.Discrete(max_power * n_freq) for agent in self.agents}
+        # Observation: [power, freq, SNR, PW, PRI]
         self.observation_spaces = {agent: spaces.Box(low=0, high=max_power, shape=(5,), dtype=np.float32)
                                    for agent in self.agents}
 
     def reset(self, seed=None, options=None):
-        self.state = {
-            agent: np.array([
-                0.0,
-                np.random.randint(self.n_freq),
-                np.random.rand()*5,
-                np.random.uniform(self.pw_range[0], self.pw_range[1]),
-                np.random.uniform(self.pri_range[0], self.pri_range[1])
-            ], dtype=np.float32)
-            for agent in self.agents
-        }
+        self.state = {agent: np.array([
+            0.0,
+            np.random.randint(self.n_freq),
+            np.random.rand()*5,
+            np.random.uniform(self.pw_min, self.pw_max),
+            np.random.uniform(self.pri_min, self.pri_max)
+        ], dtype=np.float32) for agent in self.agents}
         self.agent_selection = AgentSelector(self.agents)
         self._cumulative_rewards = {agent: 0 for agent in self.agents}
         self.dones = {agent: False for agent in self.agents}
@@ -62,16 +59,14 @@ class RealisticJammingEnv(AECEnv):
         for agent, action in action_dict.items():
             power = action // self.n_freq
             freq = action % self.n_freq
-            self.state[agent][:2] = [power, freq]
+            self.state[agent][0] = power
+            self.state[agent][1] = freq
 
             reward = 0
             if "jammer" in agent:
                 for r in [a for a in self.agents if "radar" in a]:
-                    freq_match = freq == int(self.state[r][1])
-                    pw_factor = np.clip(self.state[r][3] / self.pw_range[1], 0.5, 1.0)
-                    pri_factor = np.clip(self.pri_range[0] / self.state[r][4], 0.5, 1.0)
-                    reduction = 0.1 * power * freq_match * pw_factor * pri_factor
-                    self.state[r][2] = max(0, self.state[r][2] - reduction)
+                    if freq == int(self.state[r][1]):
+                        self.state[r][2] = max(0, self.state[r][2] - 0.1*power)
                 reward = np.sum([5 - self.state[r][2] for r in self.agents if "radar" in r])
             else:
                 reward = self.state[agent][2]
@@ -80,9 +75,9 @@ class RealisticJammingEnv(AECEnv):
             rewards[agent] = reward
         return self.state, rewards
 
-# -------------------------------
-# DQN Ajanı
-# -------------------------------
+# ==========================================
+# DQN Agent
+# ==========================================
 class DQNAgent:
     def __init__(self, obs_size, n_actions, lr=1e-3, gamma=0.95):
         self.obs_size = obs_size
@@ -129,72 +124,59 @@ class DQNAgent:
             self.optimizer.step()
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
-# -------------------------------
-# Sayfa Seçimi
-# -------------------------------
-page = st.sidebar.selectbox("Choose Page", ["Simulation", "Explanation"])
+# ==========================================
+# Streamlit Sayfaları
+# ==========================================
+page = st.sidebar.selectbox("Choose a page", ["Simulation", "Explanation"])
 
 if page == "Explanation":
     st.title("Program Açıklaması")
     st.markdown("""
-    ## Multi-Agent DQN ET Jamming Simulation
+    **Multi-Agent DQN ET Jamming Simülasyonu**
 
-    Bu uygulama, **Elektronik Taarruz (Electronic Attack / EA) jamming** senaryosunu simüle etmek için geliştirilmiştir.
-    Programda iki tip ajan vardır:
+    Bu program, elektromanyetik çevreye (Electronic Warfare) yönelik **Multi-Agent DQN (Deep Q-Learning)** tabanlı bir simülasyonu görselleştirir.
 
-    1. **Jammer Ajanları**: Radarların sinyalini bozmaya çalışır.
-    2. **Radar Ajanları**: Sinyalini korumaya çalışır.
+    ### Amaç:
+    - Bir veya birden fazla **jammer** radar sinyallerini bozmak için strateji öğrenir.
+    - Radar ajanları ise sinyallerini koruyacak şekilde frekans ve diğer parametreleri seçer.
 
-    ### Kullanılan Yöntemler:
-    - **DQN (Deep Q-Network)** algoritması ile ajanlar kendi eylemlerini öğrenir.
-    - **PettingZoo** ortamı multi-agent simülasyon için kullanılır.
-    - Her ajan kendi **observation vector**'üne sahiptir:
-        - `[Power, Frequency, SNR, Pulse Width (PW), Pulse Repetition Interval (PRI)]`
+    ### Başarı Kriterleri:
+    - **Radar için:** Yüksek Detection Score (SNR üzerinden normalize edilmiş performans).
+    - **Jammer için:** Yüksek Ortalama Jamming Impact (radarların SNR düşüşü).
 
-    ### Kullanıcı Parametreleri:
-    - **Jammer sayısı** ve **Radar sayısı**
-    - **Jammer gücü** (Power)
-    - **Frekans sayısı**
-    - **PW min/max** ve **PRI min/max** değerleri
-
-    ### Çıktılar:
-    - Radar SNR grafikleri
-    - Jammer frekans seçimleri heatmap’i
-    - Detection score ve jamming impact skorları
-    - Hangi ajanların daha başarılı olduğu tablo
+    ### Simülasyon Mantığı:
+    - Her ajan belirli bir state gözlemi alır: `[Power, Frequency, SNR, PW, PRI]`
+    - Jammer ajanlar radarın SNR’ını düşürmeye çalışır.
+    - Radar ajanlar sinyalini korumaya çalışır.
+    - DQN algoritması ajanlara kendi policy’lerini öğrenme imkanı verir.
+    - Sonuçlar tablolarda ve heatmap’lerde görselleştirilir.
     """)
 
 elif page == "Simulation":
     st.title("Multi-Agent DQN ET Jamming Simulation")
-    # -------------------------------
-    # Sidebar Parametreleri
-    # -------------------------------
+
+    # Sidebar parametreleri
     n_episodes = st.sidebar.slider("Number of Episodes", 50, 500, 200, 25)
     n_jammers = st.sidebar.slider("Number of Jammers", 1, 5, 2)
     n_radars = st.sidebar.slider("Number of Radars", 1, 3, 1)
     max_power = st.sidebar.slider("Max Jammer Power", 1, 20, 10)
     n_freq = st.sidebar.slider("Number of Frequencies", 2, 10, 5)
+    pw_min = st.sidebar.slider("PW Min (µs)", 1, 10, 2)
+    pw_max = st.sidebar.slider("PW Max (µs)", 1, 10, 5)
+    pri_min = st.sidebar.slider("PRI Min (µs)", 1000, 5000, 2500)
+    pri_max = st.sidebar.slider("PRI Max (µs)", 1000, 5000, 2530)
 
-    pw_min = st.sidebar.number_input("PW Min (µs)", 0.1, 10.0, 2.0)
-    pw_max = st.sidebar.number_input("PW Max (µs)", pw_min, 10.0, 3.0)
-    pri_min = st.sidebar.number_input("PRI Min (µs)", 1000.0, 5000.0, 2500.0)
-    pri_max = st.sidebar.number_input("PRI Max (µs)", pri_min, 5000.0, 2532.0)
-
-    st.sidebar.write("Click 'Start Simulation' to run.")
     start_button = st.sidebar.button("Start Simulation")
 
-    # -------------------------------
-    # Simülasyonu Başlat
-    # -------------------------------
     if start_button:
-        env = RealisticJammingEnv(n_jammers=n_jammers, n_radars=n_radars, max_power=max_power,
-                                  n_freq=n_freq, pw_range=(pw_min,pw_max), pri_range=(pri_min,pri_max))
+        env = RealisticJammingEnv(n_jammers, n_radars, max_power, n_freq, pw_min, pw_max, pri_min, pri_max)
         agents = {agent: DQNAgent(obs_size=5, n_actions=env.action_spaces[agent].n) for agent in env.agents}
 
         snr_baseline = 5.0
         snr_history = {r: [] for r in env.agents if "radar" in r}
-        jammer_freq_history = {j: [] for j in env.agents if "jammer" in j}
         detection_scores = {r: [] for r in snr_history}
+        jammer_freq_history = {j: [] for j in env.agents if "jammer" in j}
+        radar_freq_history = {r: [] for r in snr_history}
         jamming_impact_scores = []
         state_history = []
 
@@ -215,6 +197,7 @@ elif page == "Simulation":
                 snr = next_state[r][2]
                 snr_history[r].append(snr)
                 detection_scores[r].append(snr / snr_baseline)
+                radar_freq_history[r].append(int(next_state[r][1]))
             for j in jammer_freq_history:
                 jammer_freq_history[j].append(int(next_state[j][1]))
 
@@ -227,9 +210,25 @@ elif page == "Simulation":
 
         st.success("Simulation Complete!")
 
-        # -------------------------------
-        # Dashboard
-        # -------------------------------
+        # Başarı kriterleri
+        radar_success = {r: {"Avg SNR": np.mean([state[r][2] for state in state_history]),
+                             "Avg Detection Score": np.mean(detection_scores[r])} for r in snr_history}
+
+        jammer_success = {j: np.mean([np.mean([snr_baseline - state[r][2] for r in snr_history])
+                                      for state in state_history]) for j in jammer_freq_history}
+
+        best_radar = max(radar_success, key=lambda x: radar_success[x]["Avg Detection Score"])
+        best_jammer = max(jammer_success, key=lambda x: jammer_success[x])
+
+        st.subheader("Başarı Kriterleri")
+        st.write("**Radar Ajanları Başarı Durumu**")
+        st.table(radar_success)
+        st.write("**Jammer Ajanları Başarı Durumu (ortalama Jamming Impact)**")
+        st.table({j: {"Avg Jamming Impact": jammer_success[j]} for j in jammer_success})
+        st.success(f"En Başarılı Radar: {best_radar} (yüksek Detection Score)")
+        st.success(f"En Başarılı Jammer: {best_jammer} (yüksek Jamming Impact)")
+
+        # Dashboard grafikleri
         fig, axes = plt.subplots(2,2, figsize=(14,10))
         radars = list(snr_history.keys())
         jammers = list(jammer_freq_history.keys())
@@ -245,8 +244,8 @@ elif page == "Simulation":
             axes[0,1].plot(detection_scores[r], label=r)
         axes[0,1].set_xlabel("Episode")
         axes[0,1].set_ylabel("Detection Score")
-        axes[0,1].legend()
         axes[0,1].set_title("Radar Detection Score")
+        axes[0,1].legend()
 
         # Jammer Frequency Heatmap
         jammer_matrix = np.array([jammer_freq_history[j] for j in jammers])
@@ -255,12 +254,12 @@ elif page == "Simulation":
         axes[1,0].set_ylabel("Jammer Agents")
         axes[1,0].set_title("Jammer Frequency Choices")
 
-        # Jamming Impact Score
-        axes[1,1].plot(jamming_impact_scores, color='red', label='Jamming Impact')
+        # Radar Frequency Heatmap
+        radar_matrix = np.array([radar_freq_history[r] for r in radars])
+        sns.heatmap(radar_matrix, annot=False, fmt="d", cmap="Blues", cbar=True, ax=axes[1,1])
         axes[1,1].set_xlabel("Episode")
-        axes[1,1].set_ylabel("Avg SNR Reduction")
-        axes[1,1].set_title("Jammer Impact Score")
-        axes[1,1].legend()
+        axes[1,1].set_ylabel("Radar Agents")
+        axes[1,1].set_title("Radar Frequency Choices")
 
         plt.tight_layout()
         st.pyplot(fig)
