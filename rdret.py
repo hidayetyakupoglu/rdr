@@ -21,6 +21,61 @@ import time
 
 # PettingZoo ortam ve DQN ajanlarını buraya import et
 # from your_dqn_module import RealisticJammingEnv, DQNAgent
+import numpy as np
+from pettingzoo import AECEnv
+from pettingzoo.utils.agent_selector import AgentSelector
+from gymnasium import spaces
+
+class RealisticJammingEnv(AECEnv):
+    def __init__(self, n_jammers=2, n_radars=1, max_power=10, n_freq=5):
+        super().__init__()
+        self.n_jammers = n_jammers
+        self.n_radars = n_radars
+        self.agents = ["jammer_" + str(i) for i in range(n_jammers)] + ["radar_" + str(i) for i in range(n_radars)]
+        self.possible_agents = self.agents[:]
+        self.max_power = max_power
+        self.n_freq = n_freq
+
+        # Her ajan için action space: power x freq kombinasyonu
+        self.action_spaces = {agent: spaces.Discrete(max_power * n_freq) for agent in self.agents}
+        self.observation_spaces = {agent: spaces.Box(low=0, high=max_power, shape=(3,), dtype=np.float32)
+                                   for agent in self.agents}
+
+    def reset(self, seed=None, options=None):
+        # State: [current_power, current_freq, SNR_or_detection_metric]
+        self.state = {agent: np.array([0.0, np.random.randint(self.n_freq), np.random.rand()*5], dtype=np.float32) 
+                      for agent in self.agents}
+        self.agent_selection = AgentSelector(self.agents)
+        self._cumulative_rewards = {agent: 0 for agent in self.agents}
+        self.dones = {agent: False for agent in self.agents}
+        self.infos = {agent:{} for agent in self.agents}
+        return self.state
+
+    def observe(self, agent):
+        return self.state[agent]
+
+    def step(self, action_dict):
+        rewards = {}
+        for agent, action in action_dict.items():
+            power = action // self.n_freq
+            freq = action % self.n_freq
+
+            self.state[agent] = np.array([power, freq, self.state[agent][2]], dtype=np.float32)
+
+            reward = 0
+            if "jammer" in agent:
+                # Jammer radarın SNR'ını düşürür
+                for r in [a for a in self.agents if "radar" in a]:
+                    if freq == int(self.state[r][1]):
+                        self.state[r][2] = max(0, self.state[r][2] - 0.1*power)
+                reward = np.sum([5 - self.state[r][2] for r in self.agents if "radar" in r])
+            else:
+                # Radar ödülü kendi SNR'ı
+                reward = self.state[agent][2]
+
+            self._cumulative_rewards[agent] += reward
+            rewards[agent] = reward
+        return self.state, rewards
 
 # -------------------------------
 # Streamlit Başlık
